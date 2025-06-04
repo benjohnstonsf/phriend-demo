@@ -4,11 +4,18 @@ import { UserSession } from '../../../types';
 // In-memory session storage (use Redis in production)
 const sessions = new Map<string, UserSession>();
 
+// Environment-based logging
+const isDevelopment = process.env.NODE_ENV === 'development';
+
 interface VapiCall {
   id: string;
   metadata?: {
     sessionId?: string;
     [key: string]: unknown;
+  };
+  monitor?: {
+    listenUrl?: string;
+    controlUrl?: string;
   };
 }
 
@@ -18,56 +25,182 @@ interface VapiWebhookData {
   content?: string;
   recordingUrl?: string;
   url?: string;
+  status?: string;
   [key: string]: unknown;
+}
+
+interface VapiWebhookPayload {
+  type: string;
+  call?: VapiCall;
+  data?: VapiWebhookData;
+  [key: string]: unknown;
+}
+
+// Helper function for development logging
+function devLog(message: string, data?: unknown) {
+  if (isDevelopment) {
+    console.log(message, data || '');
+  }
+}
+
+// Helper function for production logging (errors and important events)
+function prodLog(message: string, data?: unknown) {
+  console.log(message, data || '');
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const body = await req.json() as VapiWebhookPayload;
+    
+    // Validate payload structure
+    if (!body || typeof body !== 'object') {
+      prodLog('❌ Invalid webhook payload: not an object');
+      return NextResponse.json({ error: 'Invalid payload structure' }, { status: 400 });
+    }
+
+    if (!body.type || typeof body.type !== 'string') {
+      prodLog('❌ Invalid webhook payload: missing or invalid type field');
+      return NextResponse.json({ error: 'Missing or invalid type field' }, { status: 400 });
+    }
+
     const { type, call, data } = body;
 
-    console.log('Vapi webhook received:', { type, callId: call?.id, data });
+    // Enhanced logging for Step 1 - detailed in dev, minimal in prod
+    devLog('🎯 Vapi Webhook Event:', {
+      type,
+      callId: call?.id,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Log the full payload for debugging Step 1 (dev only)
+    devLog('📦 Full payload:', JSON.stringify(body, null, 2));
+
+    // Production logging for important events
+    if (!isDevelopment && ['call-started', 'call-ended', 'error'].includes(type)) {
+      prodLog(`📞 Vapi Event: ${type}`, { callId: call?.id });
+    }
 
     switch (type) {
       case 'call-started':
+        devLog('🟢 Call started!');
+        
+        // Validate call object
+        if (!call || !call.id) {
+          prodLog('⚠️  Warning: call-started event missing call data');
+          break;
+        }
+        
+        // Log monitor URLs - these are critical for Step 2 audio streaming
+        if (call.monitor?.listenUrl && call.monitor?.controlUrl) {
+          devLog('🎧 Monitor URLs available:', call.monitor);
+          devLog('   🔊 Listen URL (WebSocket for audio):', call.monitor.listenUrl);
+          devLog('   🎛️  Control URL (for call control):', call.monitor.controlUrl);
+          prodLog('✅ Monitor URLs captured for audio streaming');
+        } else {
+          prodLog('⚠️  WARNING: No monitor URLs found! Check monitorPlan settings.');
+          devLog('   Available call data:', call);
+        }
         await handleCallStarted(call);
         break;
       
       case 'transcript':
-        await handleTranscript(call, data);
+        if (data?.role && (data?.transcript || data?.content)) {
+          devLog('📝 Transcript event:', {
+            role: data.role,
+            text: data.transcript || data.content,
+            timestamp: new Date().toISOString()
+          });
+          if (call) await handleTranscript(call, data);
+        } else {
+          devLog('⚠️  Malformed transcript event:', data);
+        }
+        break;
+        
+      case 'speech-update':
+        devLog('🎤 Speech update:', {
+          role: data?.role,
+          status: data?.status,
+          timestamp: new Date().toISOString()
+        });
+        break;
+        
+      case 'user-interrupted':
+        devLog('⚡ User interrupted! (Potential emotional moment)', {
+          timestamp: new Date().toISOString()
+        });
         break;
       
       case 'recording':
-        await handleRecording(call, data);
+        const recordingUrl = data?.recordingUrl || data?.url;
+        if (recordingUrl) {
+          devLog('🎬 Recording event:', {
+            recordingUrl,
+            timestamp: new Date().toISOString()
+          });
+          if (call) await handleRecording(call, data);
+        } else {
+          devLog('⚠️  Recording event without URL:', data);
+        }
         break;
       
       case 'call-ended':
-        await handleCallEnded(call);
+        devLog('🔴 Call ended!');
+        prodLog('📞 Call ended', { callId: call?.id });
+        if (call) await handleCallEnded(call);
+        break;
+      
+      case 'error':
+        prodLog('❌ Vapi error event:', data);
         break;
       
       default:
-        console.log('Unhandled webhook type:', type);
+        devLog('❓ Unhandled event type:', type);
+        if (data) devLog('Event data:', data);
     }
 
-    return NextResponse.json({ status: 'success' });
+    // Always return 200 OK to Vapi
+    return NextResponse.json({ success: true });
+    
   } catch (error) {
-    console.error('Webhook error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    if (error instanceof SyntaxError) {
+      prodLog('❌ Webhook JSON parsing error:', error.message);
+      return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
+    }
+    
+    prodLog('❌ Webhook processing error:', error);
+    return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 });
   }
 }
 
 async function handleCallStarted(call: VapiCall) {
-  const sessionId = call?.metadata?.sessionId || call?.id;
-  
-  const session: UserSession = {
-    id: sessionId,
-    callId: call?.id,
-    status: 'counseling',
-    createdAt: new Date(),
-  };
-  
-  sessions.set(sessionId, session);
-  console.log('Session started:', sessionId);
+  try {
+    const sessionId = call?.metadata?.sessionId || call?.id;
+    
+    if (!sessionId) {
+      prodLog('❌ Cannot create session: missing sessionId and call.id');
+      return;
+    }
+    
+    const session: UserSession = {
+      id: sessionId,
+      callId: call?.id,
+      status: 'counseling',
+      createdAt: new Date(),
+    };
+    
+    // Store monitor URLs for audio streaming in Step 2
+    if (call?.monitor?.listenUrl) {
+      devLog('💾 Storing monitor URLs for audio streaming...');
+      // We'll add audio streaming state to UserSession in Step 2
+    }
+    
+    sessions.set(sessionId, session);
+    devLog('✅ Session started:', sessionId);
+    prodLog('🎯 New session created', { sessionId, callId: call?.id });
+    
+  } catch (error) {
+    prodLog('❌ Error in handleCallStarted:', error);
+  }
 }
 
 async function handleTranscript(call: VapiCall, data: VapiWebhookData) {
