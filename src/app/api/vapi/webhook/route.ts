@@ -30,9 +30,18 @@ interface VapiWebhookData {
 }
 
 interface VapiWebhookPayload {
-  type: string;
+  type?: string;
   call?: VapiCall;
   data?: VapiWebhookData;
+  message?: {
+    type: string;
+    call?: VapiCall;
+    status?: string;
+    role?: string;
+    conversation?: Array<{ role: string; content: string }>;
+    transcript?: string;
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 }
 
@@ -49,21 +58,35 @@ function prodLog(message: string, data?: unknown) {
 }
 
 export async function POST(req: NextRequest) {
+  // Always log incoming webhooks for debugging
+  console.log('🔥 WEBHOOK RECEIVED:', new Date().toISOString());
+  
   try {
     const body = await req.json() as VapiWebhookPayload;
     
-    // Validate payload structure
-    if (!body || typeof body !== 'object') {
-      prodLog('❌ Invalid webhook payload: not an object');
-      return NextResponse.json({ error: 'Invalid payload structure' }, { status: 400 });
+    // Always log the basic info for debugging
+    console.log('🔥 Raw payload keys:', Object.keys(body));
+    
+    // Handle Vapi's actual payload structure - events are wrapped in 'message'
+    const message = (body as VapiWebhookPayload).message;
+    if (!message) {
+      prodLog('❌ Invalid webhook payload: no message field');
+      return NextResponse.json({ error: 'No message field found' }, { status: 400 });
     }
-
-    if (!body.type || typeof body.type !== 'string') {
-      prodLog('❌ Invalid webhook payload: missing or invalid type field');
-      return NextResponse.json({ error: 'Missing or invalid type field' }, { status: 400 });
+    
+    const { type, call, status, role, conversation, transcript } = message;
+    
+    console.log('🔥 Extracted event type:', type);
+    console.log('🔥 NODE_ENV:', process.env.NODE_ENV);
+    console.log('🔥 isDevelopment:', isDevelopment);
+    
+    // Validate message structure
+    if (!type || typeof type !== 'string') {
+      prodLog('❌ Invalid webhook payload: missing or invalid type field in message');
+      console.log('🔥 Available fields in message:', Object.keys(message));
+      console.log('🔥 Type field value:', type, 'Type of type:', typeof type);
+      return NextResponse.json({ error: 'Missing or invalid type field in message' }, { status: 400 });
     }
-
-    const { type, call, data } = body;
 
     // Enhanced logging for Step 1 - detailed in dev, minimal in prod
     devLog('🎯 Vapi Webhook Event:', {
@@ -73,55 +96,62 @@ export async function POST(req: NextRequest) {
     });
     
     // Log the full payload for debugging Step 1 (dev only)
-    devLog('📦 Full payload:', JSON.stringify(body, null, 2));
+    devLog('📦 Full message:', JSON.stringify(message, null, 2));
 
     // Production logging for important events
-    if (!isDevelopment && ['call-started', 'call-ended', 'error'].includes(type)) {
+    if (!isDevelopment && ['status-update', 'speech-update', 'conversation-update', 'transcript', 'end-of-call-report'].includes(type)) {
       prodLog(`📞 Vapi Event: ${type}`, { callId: call?.id });
     }
 
     switch (type) {
-      case 'call-started':
-        devLog('🟢 Call started!');
-        
-        // Validate call object
-        if (!call || !call.id) {
-          prodLog('⚠️  Warning: call-started event missing call data');
-          break;
-        }
-        
-        // Log monitor URLs - these are critical for Step 2 audio streaming
-        if (call.monitor?.listenUrl && call.monitor?.controlUrl) {
-          devLog('🎧 Monitor URLs available:', call.monitor);
-          devLog('   🔊 Listen URL (WebSocket for audio):', call.monitor.listenUrl);
-          devLog('   🎛️  Control URL (for call control):', call.monitor.controlUrl);
-          prodLog('✅ Monitor URLs captured for audio streaming');
+      case 'status-update':
+        if (status === 'in-progress') {
+          console.log('🟢 Call started! (status-update: in-progress)');
+          
+          // Check for monitor URLs - these are critical for Step 2 audio streaming
+          if (call?.monitor?.listenUrl && call?.monitor?.controlUrl) {
+            devLog('🎧 Monitor URLs available:', call.monitor);
+            devLog('   🔊 Listen URL (WebSocket for audio):', call.monitor.listenUrl);
+            devLog('   🎛️  Control URL (for call control):', call.monitor.controlUrl);
+            prodLog('✅ Monitor URLs captured for audio streaming');
+          } else {
+            prodLog('⚠️  WARNING: No monitor URLs found! Check monitorPlan settings.');
+            devLog('   Available call data:', call);
+          }
+          
+          if (call) await handleCallStarted(call);
         } else {
-          prodLog('⚠️  WARNING: No monitor URLs found! Check monitorPlan settings.');
-          devLog('   Available call data:', call);
+          devLog('📊 Status update:', status);
         }
-        await handleCallStarted(call);
         break;
       
-      case 'transcript':
-        if (data?.role && (data?.transcript || data?.content)) {
-          devLog('📝 Transcript event:', {
-            role: data.role,
-            text: data.transcript || data.content,
-            timestamp: new Date().toISOString()
-          });
-          if (call) await handleTranscript(call, data);
-        } else {
-          devLog('⚠️  Malformed transcript event:', data);
+      case 'conversation-update':
+        devLog('💬 Conversation update:', {
+          messageCount: conversation?.length || 0,
+          timestamp: new Date().toISOString()
+        });
+        if (call && conversation) {
+          await handleConversationUpdate(call, conversation);
         }
         break;
         
       case 'speech-update':
         devLog('🎤 Speech update:', {
-          role: data?.role,
-          status: data?.status,
+          role: role,
+          status: status,
           timestamp: new Date().toISOString()
         });
+        break;
+        
+      case 'transcript':
+        if (role && transcript) {
+          devLog('📝 Transcript event:', {
+            role: role,
+            text: transcript,
+            timestamp: new Date().toISOString()
+          });
+          if (call) await handleTranscript(call, { role, transcript });
+        }
         break;
         
       case 'user-interrupted':
@@ -130,38 +160,25 @@ export async function POST(req: NextRequest) {
         });
         break;
       
-      case 'recording':
-        const recordingUrl = data?.recordingUrl || data?.url;
-        if (recordingUrl) {
-          devLog('🎬 Recording event:', {
-            recordingUrl,
-            timestamp: new Date().toISOString()
-          });
-          if (call) await handleRecording(call, data);
-        } else {
-          devLog('⚠️  Recording event without URL:', data);
-        }
-        break;
-      
-      case 'call-ended':
-        devLog('🔴 Call ended!');
+      case 'end-of-call-report':
+        devLog('🔴 Call ended! (end-of-call-report)');
         prodLog('📞 Call ended', { callId: call?.id });
         if (call) await handleCallEnded(call);
         break;
       
-      case 'error':
-        prodLog('❌ Vapi error event:', data);
-        break;
-      
       default:
         devLog('❓ Unhandled event type:', type);
-        if (data) devLog('Event data:', data);
+        devLog('Event data keys:', Object.keys(message));
     }
 
     // Always return 200 OK to Vapi
     return NextResponse.json({ success: true });
     
   } catch (error) {
+    console.log('🔥 WEBHOOK ERROR CAUGHT:', error);
+    console.log('🔥 Error type:', typeof error);
+    console.log('🔥 Error message:', error instanceof Error ? error.message : 'Unknown error');
+    
     if (error instanceof SyntaxError) {
       prodLog('❌ Webhook JSON parsing error:', error.message);
       return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
@@ -203,13 +220,48 @@ async function handleCallStarted(call: VapiCall) {
   }
 }
 
-async function handleTranscript(call: VapiCall, data: VapiWebhookData) {
+async function handleConversationUpdate(call: VapiCall, conversation: Array<{ role: string; content: string }>) {
+  try {
+    const sessionId = call?.metadata?.sessionId || call?.id;
+    const session = sessions.get(sessionId);
+    
+    if (!session) return;
+
+    // Look for user messages in the conversation to extract information
+    const userMessages = conversation.filter(msg => msg.role === 'user' || msg.role === 'assistant');
+    
+    for (const msg of userMessages) {
+      if (msg.role === 'user') {
+        // Extract user name from conversation
+        if (!session.userName && msg.content.length > 0) {
+          const nameMatch = msg.content.match(/my name is (\w+)|i'm (\w+)|i am (\w+)|call me (\w+)/i);
+          if (nameMatch) {
+            session.userName = nameMatch[1] || nameMatch[2] || nameMatch[3] || nameMatch[4];
+            devLog('Captured user name from conversation:', session.userName);
+          }
+        }
+
+        // Capture problem description from longer messages
+        if (!session.problemDescription && msg.content.length > 50) {
+          session.problemDescription = msg.content;
+          devLog('Captured problem description from conversation');
+        }
+      }
+    }
+
+    sessions.set(sessionId, session);
+  } catch (error) {
+    prodLog('❌ Error in handleConversationUpdate:', error);
+  }
+}
+
+async function handleTranscript(call: VapiCall, data: { role: string; transcript: string }) {
   const sessionId = call?.metadata?.sessionId || call?.id;
   const session = sessions.get(sessionId);
   
   if (!session || data.role !== 'user') return;
 
-  const transcript = data.transcript || data.content;
+  const transcript = data.transcript;
   if (!transcript) return;
 
   // Extract user name from early conversation
@@ -217,30 +269,17 @@ async function handleTranscript(call: VapiCall, data: VapiWebhookData) {
     const nameMatch = transcript.match(/my name is (\w+)|i'm (\w+)|i am (\w+)|call me (\w+)/i);
     if (nameMatch) {
       session.userName = nameMatch[1] || nameMatch[2] || nameMatch[3] || nameMatch[4];
-      console.log('Captured user name:', session.userName);
+      devLog('Captured user name from transcript:', session.userName);
     }
   }
 
   // Capture problem description from longer messages
   if (!session.problemDescription && transcript.length > 50) {
     session.problemDescription = transcript;
-    console.log('Captured problem description');
+    devLog('Captured problem description from transcript');
   }
 
   sessions.set(sessionId, session);
-}
-
-async function handleRecording(call: VapiCall, data: VapiWebhookData) {
-  const sessionId = call?.metadata?.sessionId || call?.id;
-  const session = sessions.get(sessionId);
-  
-  if (!session) return;
-
-  if (data.recordingUrl || data.url) {
-    session.recordingUrl = data.recordingUrl || data.url;
-    console.log('Recording URL captured:', session.recordingUrl);
-    sessions.set(sessionId, session);
-  }
 }
 
 async function handleCallEnded(call: VapiCall) {
