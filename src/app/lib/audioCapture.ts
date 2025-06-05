@@ -122,6 +122,7 @@ export class VapiAudioCapture extends EventEmitter {
   private handleMessage(data: Buffer | string) {
     if (data instanceof Buffer) {
       // This is audio data!
+      this.analyzeAudioFormat(data); // Add audio format debugging
       this.audioChunksReceived++;
       this.totalAudioBytes += data.length;
       
@@ -177,28 +178,46 @@ export class VapiAudioCapture extends EventEmitter {
     }
   }
   
+  // Add this debug method to analyze audio format
+  private analyzeAudioFormat(data: Buffer) {
+    // Log first few audio chunks in detail
+    if (this.audioChunksReceived <= 5) {
+      console.log(`\n🔍 Audio Chunk Analysis #${this.audioChunksReceived}:`);
+      console.log(`- Size: ${data.length} bytes`);
+      console.log(`- First 20 bytes (hex):`, data.slice(0, 20).toString('hex'));
+      console.log(`- First 10 samples (16-bit LE):`, Array.from(new Int16Array(data.slice(0, 20).buffer)));
+      
+      // Check if it's stereo by looking at pattern
+      const samples = new Int16Array(data.buffer);
+      let possibleStereo = true;
+      for (let i = 0; i < Math.min(samples.length - 2, 100); i += 2) {
+        if (samples[i] !== 0 && samples[i + 1] !== 0) {
+          possibleStereo = true;
+          break;
+        }
+      }
+      console.log(`- Possible stereo: ${possibleStereo}`);
+    }
+  }
+  
   private async triggerRealTimeVoiceCloning() {
     try {
-      console.log('🎙️ Starting real-time voice cloning with timing validation...');
+      console.log('🎙️ Starting real-time voice cloning...');
       
       const audioForCloning = this.getBufferedAudio();
-      
       if (audioForCloning.length === 0) {
         throw new Error('No audio data available for cloning');
       }
       
-      const combinedAudio = Buffer.concat(audioForCloning);
+      // Extract only user audio (channel 0) from stereo PCM
+      const userAudio = this.extractUserChannel(audioForCloning);
+      console.log(`📦 Extracted user audio: ${userAudio.length} bytes from ${audioForCloning.length} chunks`);
       
-      // Validate audio size (rough check)
-      if (combinedAudio.length < 100000) { // Less than ~100KB seems too small
-        console.warn('⚠️ Audio data seems small for 30 seconds. Proceeding anyway...');
-      }
+      // Create WAV file with correct sample rate
+      const wavFile = this.createWAVFile(userAudio, 16000); // Keep at 16kHz for now
       
-      console.log(`📦 Audio ready for cloning: ${combinedAudio.length} bytes from ${audioForCloning.length} chunks`);
-      
-      // Create proper WAV header for the audio data
-      const audioWithHeader = this.createWAVFile(combinedAudio);
-      const audioBlob = new Blob([audioWithHeader], { type: 'audio/wav' });
+      // Convert to blob
+      const audioBlob = new Blob([wavFile], { type: 'audio/wav' });
       
       // Emit event for processing
       this.emit('voiceCloneReady', {
@@ -208,40 +227,62 @@ export class VapiAudioCapture extends EventEmitter {
         audioBlob: audioBlob,
         stats: {
           chunks: audioForCloning.length,
-          bytes: combinedAudio.length,
-          actualDuration: this.audioStartTime ? 
-            Math.round((Date.now() - this.audioStartTime.getTime()) / 1000) : 0
+          bytes: userAudio.length,
+          duration: Math.round((Date.now() - this.audioStartTime!.getTime()) / 1000)
         }
       });
       
     } catch (error) {
-      console.error('❌ Real-time voice cloning trigger failed:', error);
+      console.error('❌ Voice cloning trigger failed:', error);
       this.emit('voiceCloneError', error);
     }
   }
   
-  // Create proper WAV file header
-  private createWAVFile(audioData: Buffer): Buffer {
-    const sampleRate = 16000; // Common rate for voice
-    const channels = 1; // Mono
+  // New method to extract user channel from stereo PCM
+  private extractUserChannel(audioChunks: Buffer[]): Buffer {
+    const extractedChunks: Buffer[] = [];
+    
+    for (const chunk of audioChunks) {
+      const samples = new Int16Array(chunk.buffer, chunk.byteOffset, chunk.length / 2);
+      const userSamples = new Int16Array(samples.length / 2);
+      
+      // Extract every other sample (channel 0)
+      for (let i = 0; i < samples.length; i += 2) {
+        userSamples[i / 2] = samples[i];
+      }
+      
+      extractedChunks.push(Buffer.from(userSamples.buffer));
+    }
+    
+    return Buffer.concat(extractedChunks);
+  }
+  
+  // Simplified WAV creation without upsampling
+  private createWAVFile(audioData: Buffer, sampleRate: number): Buffer {
+    const channels = 1;
     const bitsPerSample = 16;
+    const dataSize = audioData.length;
     
     const header = Buffer.alloc(44);
     
-    // WAV header
+    // RIFF header
     header.write('RIFF', 0);
-    header.writeUInt32LE(36 + audioData.length, 4);
+    header.writeUInt32LE(36 + dataSize, 4);
     header.write('WAVE', 8);
+    
+    // fmt chunk
     header.write('fmt ', 12);
-    header.writeUInt32LE(16, 16);
-    header.writeUInt16LE(1, 20);
+    header.writeUInt32LE(16, 16); // fmt chunk size
+    header.writeUInt16LE(1, 20); // PCM format
     header.writeUInt16LE(channels, 22);
     header.writeUInt32LE(sampleRate, 24);
     header.writeUInt32LE(sampleRate * channels * bitsPerSample / 8, 28);
     header.writeUInt16LE(channels * bitsPerSample / 8, 32);
     header.writeUInt16LE(bitsPerSample, 34);
+    
+    // data chunk
     header.write('data', 36);
-    header.writeUInt32LE(audioData.length, 40);
+    header.writeUInt32LE(dataSize, 40);
     
     return Buffer.concat([header, audioData]);
   }
