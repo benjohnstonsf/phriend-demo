@@ -8,6 +8,8 @@ export interface UserSession {
   callId?: string;
   status: 'initializing' | 'counseling' | 'processing' | 'calling_back' | 'completed' | 'error';
   createdAt: Date;
+  futureSelfReady?: boolean;
+  futureSelfAssistantId?: string;
 }
 
 export interface VapiWebhookEvent {

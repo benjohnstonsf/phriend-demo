@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { UserSession } from '../../../types';
+import { VapiAudioCapture } from '../../../lib/audioCapture';
 
 // In-memory session storage (use Redis in production)
 const sessions = new Map<string, UserSession>();
+
+// Store active audio captures
+const audioCaptures = new Map<string, VapiAudioCapture>();
 
 // Environment-based logging
 const isDevelopment = process.env.NODE_ENV === 'development';
@@ -207,8 +211,121 @@ async function handleCallStarted(call: VapiCall) {
     
     // Store monitor URLs for audio streaming in Step 2
     if (call?.monitor?.listenUrl) {
-      devLog('💾 Storing monitor URLs for audio streaming...');
-      // We'll add audio streaming state to UserSession in Step 2
+      devLog('💾 Starting audio capture for real-time processing...');
+      
+      // Create and start audio capture with real-time cloning support
+      const audioCapture = new VapiAudioCapture(call.id, sessionId, session.userName || 'User');
+      audioCaptures.set(call.id, audioCapture);
+      
+      // Set up event handlers for audio capture
+      audioCapture.on('connected', () => {
+        devLog('🔗 WebSocket connection established successfully');
+      });
+      
+      audioCapture.on('audioChunk', () => {
+        // Audio chunk received - real-time cloning happens automatically
+        const stats = audioCapture.getStats();
+        if (stats.audioChunksReceived % 500 === 0) {
+          devLog(`🎵 Audio progress: ${stats.audioChunksReceived} chunks, ${stats.totalAudioBytes} bytes`);
+        }
+      });
+      
+      // 🎭 NEW: Real-time voice cloning event handler
+      audioCapture.on('voiceCloneReady', async (data) => {
+        console.log('🎭 Real-time voice cloning triggered!');
+        console.log(`📊 Audio stats: ${data.stats.chunks} chunks, ${data.stats.bytes} bytes, ${data.stats.actualDuration}s`);
+        
+        try {
+          // Convert Blob to FormData for the API call
+          const formData = new FormData();
+          formData.append('sessionId', data.sessionId);
+          formData.append('callId', data.callId);
+          formData.append('userName', data.userName);
+          formData.append('audio', data.audioBlob, 'realtime_audio.wav');
+          
+          console.log('📤 Sending audio to real-time cloning API...');
+          
+          // Call the real-time cloning API with extended timeout and better error handling
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => {
+            controller.abort();
+            console.log('⏰ Voice cloning communication timed out, but ElevenLabs may still be processing...');
+          }, 900000); // 15 minute timeout
+          
+          try {
+            const cloneResponse = await fetch('http://localhost:3000/api/elevenlabs/clone-voice-realtime', {
+              method: 'POST',
+              body: formData,
+              signal: controller.signal,
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (cloneResponse.ok) {
+              const cloneData = await cloneResponse.json();
+              
+              // Store the cloned voice ID in the session
+              session.clonedVoiceId = cloneData.voice_id;
+              sessions.set(sessionId, session);
+              
+              console.log(`✅ Real-time voice cloning completed: ${cloneData.voice_id}`);
+              console.log('🚀 Voice clone ready! Starting future self preparation...');
+              
+              // Start creating the future self assistant NOW (while call is ongoing)
+              prepareAsyncFutureSelf(session);
+              
+            } else {
+              const errorText = await cloneResponse.text();
+              console.error('❌ Real-time voice cloning failed:', errorText);
+            }
+            
+          } catch (fetchError) {
+            clearTimeout(timeoutId);
+            
+            // Check if it's a timeout error but ElevenLabs might have succeeded
+            const error = fetchError as Error;
+            if (error.name === 'AbortError' || error.message.includes('timeout') || error.message.includes('Headers Timeout')) {
+              console.log('⚠️ Communication timeout occurred, but voice cloning may have succeeded at ElevenLabs');
+              console.log('⚠️ Please check your ElevenLabs account for new voices');
+              console.log('⚠️ If a voice was created, the system will continue processing in the background');
+            } else {
+              throw fetchError; // Re-throw non-timeout errors
+            }
+          }
+          
+        } catch (error) {
+          console.error('❌ Real-time cloning process failed:', error);
+        }
+      });
+      
+      audioCapture.on('voiceCloneError', (error) => {
+        console.error('❌ Voice clone error:', error);
+      });
+      
+      audioCapture.on('metadata', (metadata: Record<string, unknown>) => {
+        devLog('📊 Audio metadata:', metadata);
+      });
+      
+      audioCapture.on('error', (error: Error) => {
+        prodLog('❌ Audio capture error:', error.message);
+        // Could implement fallback logic here
+      });
+      
+      audioCapture.on('closed', (stats: { callId: string; audioChunksReceived: number; totalAudioBytes: number }) => {
+        prodLog('🔴 Audio capture ended:', {
+          callId: stats.callId,
+          chunks: stats.audioChunksReceived,
+          bytes: stats.totalAudioBytes
+        });
+      });
+      
+      // Connect to the WebSocket
+      await audioCapture.connect(call.monitor.listenUrl);
+      devLog('🎙️ Audio capture started for call:', call.id);
+      
+    } else {
+      prodLog('⚠️  WARNING: No monitor URLs found! Check monitorPlan settings.');
+      devLog('   Available call data:', call);
     }
     
     sessions.set(sessionId, session);
@@ -218,6 +335,49 @@ async function handleCallStarted(call: VapiCall) {
   } catch (error) {
     prodLog('❌ Error in handleCallStarted:', error);
   }
+}
+
+// New function to prepare future self asynchronously
+async function prepareAsyncFutureSelf(session: UserSession) {
+  console.log('🚀 Preparing future self assistant asynchronously...');
+  
+  // This runs in the background while the call continues
+  setTimeout(async () => {
+    try {
+      if (!session.clonedVoiceId) {
+        console.log('⚠️ No cloned voice ID available for future self preparation');
+        return;
+      }
+      
+      console.log('🔮 Creating future self assistant with cloned voice...');
+      
+      const futureResponse = await fetch('/api/vapi/create-future-self', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: session.id,
+          voiceId: session.clonedVoiceId,
+          userName: session.userName,
+          problemDescription: session.problemDescription
+        })
+      });
+      
+      if (futureResponse.ok) {
+        const futureData = await futureResponse.json();
+        console.log('✅ Future self assistant prepared and ready!');
+        session.futureSelfReady = true;
+        session.futureSelfAssistantId = futureData.assistantId;
+        sessions.set(session.id, session);
+        console.log('🎭 Future self callback system is ready to go!');
+      } else {
+        const errorText = await futureResponse.text();
+        console.error('❌ Future self preparation failed:', errorText);
+      }
+      
+    } catch (error) {
+      console.error('❌ Async future self preparation failed:', error);
+    }
+  }, 5000); // 5 second delay to let more conversation happen
 }
 
 async function handleConversationUpdate(call: VapiCall, conversation: Array<{ role: string; content: string }>) {
@@ -285,6 +445,17 @@ async function handleTranscript(call: VapiCall, data: { role: string; transcript
 async function handleCallEnded(call: VapiCall) {
   const sessionId = call?.metadata?.sessionId || call?.id;
   const session = sessions.get(sessionId);
+  
+  // Clean up audio capture first
+  if (call?.id) {
+    const audioCapture = audioCaptures.get(call.id);
+    if (audioCapture) {
+      devLog('🧹 Cleaning up audio capture for call:', call.id);
+      audioCapture.disconnect();
+      audioCaptures.delete(call.id);
+      devLog('✅ Audio capture cleaned up successfully');
+    }
+  }
   
   if (!session) return;
 
