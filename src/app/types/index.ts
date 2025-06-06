@@ -10,6 +10,17 @@ export interface UserSession {
   createdAt: Date;
   futureSelfReady?: boolean;
   futureSelfAssistantId?: string;
+  
+  // New fields for Future Self creation
+  startTime?: number;
+  transcripts: Array<{
+    role: 'user' | 'assistant';
+    text: string;
+    timestamp: number;
+  }>;
+  voiceCloneCompleted: boolean;
+  futureSelfCreated: boolean;
+  futureSelfTimer?: NodeJS.Timeout;
 }
 
 export interface VapiWebhookEvent {

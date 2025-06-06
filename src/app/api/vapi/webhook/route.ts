@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { UserSession } from '../../../types';
 import { VapiAudioCapture } from '../../../lib/audioCapture';
+import { createFutureSelfAssistant } from '../../../lib/vapiHelpers';
 
 // In-memory session storage (use Redis in production)
 const sessions = new Map<string, UserSession>();
@@ -207,7 +208,21 @@ async function handleCallStarted(call: VapiCall) {
       callId: call?.id,
       status: 'counseling',
       createdAt: new Date(),
+      
+      // Initialize new fields for Future Self creation
+      startTime: Date.now(),
+      transcripts: [],
+      voiceCloneCompleted: false,
+      futureSelfCreated: false,
     };
+    
+    // Set 30-second timer for Future Self creation
+    const futureSelfTimer = setTimeout(async () => {
+      console.log('⏰ 30 seconds elapsed - triggering Future Self creation...');
+      await triggerFutureSelfCreation(sessionId);
+    }, 30000); // 30 seconds
+    
+    session.futureSelfTimer = futureSelfTimer;
     
     // Store monitor URLs for audio streaming in Step 2
     if (call?.monitor?.listenUrl) {
@@ -230,10 +245,10 @@ async function handleCallStarted(call: VapiCall) {
         }
       });
       
-      // 🎭 NEW: Real-time voice cloning event handler
+      // 🎭 UPDATED: Real-time voice cloning event handler
       audioCapture.on('voiceCloneReady', async (data) => {
         console.log('🎭 Real-time voice cloning triggered!');
-        console.log(`📊 Audio stats: ${data.stats.chunks} chunks, ${data.stats.bytes} bytes, ${data.stats.actualDuration}s`);
+        console.log(`📊 Audio stats: ${data.stats.chunks} chunks, ${data.stats.bytes} bytes, ${data.stats.duration}s`);
         
         try {
           // Convert Blob to FormData for the API call
@@ -264,15 +279,16 @@ async function handleCallStarted(call: VapiCall) {
             if (cloneResponse.ok) {
               const cloneData = await cloneResponse.json();
               
-              // Store the cloned voice ID in the session
-              session.clonedVoiceId = cloneData.voice_id;
-              sessions.set(sessionId, session);
-              
-              console.log(`✅ Real-time voice cloning completed: ${cloneData.voice_id}`);
-              console.log('🚀 Voice clone ready! Starting future self preparation...');
-              
-              // Start creating the future self assistant NOW (while call is ongoing)
-              prepareAsyncFutureSelf(session);
+              // Update session with cloned voice ID
+              const currentSession = sessions.get(sessionId);
+              if (currentSession) {
+                currentSession.clonedVoiceId = cloneData.voice_id;
+                currentSession.voiceCloneCompleted = true;
+                sessions.set(sessionId, currentSession);
+                
+                console.log(`✅ Real-time voice cloning completed: ${cloneData.voice_id}`);
+                console.log('🚀 Voice clone ready! Waiting for 60-second mark for Future Self creation...');
+              }
               
             } else {
               const errorText = await cloneResponse.text();
@@ -281,15 +297,11 @@ async function handleCallStarted(call: VapiCall) {
             
           } catch (fetchError) {
             clearTimeout(timeoutId);
-            
-            // Check if it's a timeout error but ElevenLabs might have succeeded
             const error = fetchError as Error;
-            if (error.name === 'AbortError' || error.message.includes('timeout') || error.message.includes('Headers Timeout')) {
+            if (error.name === 'AbortError' || error.message.includes('timeout')) {
               console.log('⚠️ Communication timeout occurred, but voice cloning may have succeeded at ElevenLabs');
-              console.log('⚠️ Please check your ElevenLabs account for new voices');
-              console.log('⚠️ If a voice was created, the system will continue processing in the background');
             } else {
-              throw fetchError; // Re-throw non-timeout errors
+              throw fetchError;
             }
           }
           
@@ -308,7 +320,6 @@ async function handleCallStarted(call: VapiCall) {
       
       audioCapture.on('error', (error: Error) => {
         prodLog('❌ Audio capture error:', error.message);
-        // Could implement fallback logic here
       });
       
       audioCapture.on('closed', (stats: { callId: string; audioChunksReceived: number; totalAudioBytes: number }) => {
@@ -337,47 +348,78 @@ async function handleCallStarted(call: VapiCall) {
   }
 }
 
-// New function to prepare future self asynchronously
-async function prepareAsyncFutureSelf(session: UserSession) {
-  console.log('🚀 Preparing future self assistant asynchronously...');
-  
-  // This runs in the background while the call continues
-  setTimeout(async () => {
-    try {
-      if (!session.clonedVoiceId) {
-        console.log('⚠️ No cloned voice ID available for future self preparation');
-        return;
-      }
-      
-      console.log('🔮 Creating future self assistant with cloned voice...');
-      
-      const futureResponse = await fetch('/api/vapi/create-future-self', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: session.id,
-          voiceId: session.clonedVoiceId,
-          userName: session.userName,
-          problemDescription: session.problemDescription
-        })
-      });
-      
-      if (futureResponse.ok) {
-        const futureData = await futureResponse.json();
-        console.log('✅ Future self assistant prepared and ready!');
-        session.futureSelfReady = true;
-        session.futureSelfAssistantId = futureData.assistantId;
-        sessions.set(session.id, session);
-        console.log('🎭 Future self callback system is ready to go!');
-      } else {
-        const errorText = await futureResponse.text();
-        console.error('❌ Future self preparation failed:', errorText);
-      }
-      
-    } catch (error) {
-      console.error('❌ Async future self preparation failed:', error);
+// NEW: Function to trigger Future Self creation
+async function triggerFutureSelfCreation(sessionId: string) {
+  try {
+    const session = sessions.get(sessionId);
+    if (!session) {
+      console.error('❌ Session not found for Future Self creation:', sessionId);
+      return;
     }
-  }, 5000); // 5 second delay to let more conversation happen
+    
+    if (session.futureSelfCreated) {
+      console.log('✅ Future Self already created for session:', sessionId);
+      return;
+    }
+    
+    console.log('🎭 Creating Future Self assistant...');
+    console.log(`📊 Session state: voiceClone=${session.voiceCloneCompleted}, transcripts=${session.transcripts.length}`);
+    
+    // Check if voice clone is ready
+    if (!session.voiceCloneCompleted || !session.clonedVoiceId) {
+      console.log('⚠️ Voice clone not ready yet, waiting for completion...');
+      
+      // Set up a polling mechanism to check every 5 seconds
+      const pollInterval = setInterval(async () => {
+        const updatedSession = sessions.get(sessionId);
+        if (updatedSession?.voiceCloneCompleted && updatedSession.clonedVoiceId) {
+          clearInterval(pollInterval);
+          console.log('✅ Voice clone now ready, proceeding with Future Self creation...');
+          await createFutureSelfForSession(updatedSession);
+        }
+      }, 5000);
+      
+      // Stop polling after 5 minutes
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        console.log('⏰ Stopped polling for voice clone completion');
+      }, 300000);
+      
+      return;
+    }
+    
+    // Voice clone is ready, create Future Self immediately
+    await createFutureSelfForSession(session);
+    
+  } catch (error) {
+    console.error('❌ Error triggering Future Self creation:', error);
+  }
+}
+
+// NEW: Helper function to create Future Self assistant
+async function createFutureSelfForSession(session: UserSession) {
+  try {
+    console.log('🔮 Creating Future Self assistant with:', {
+      sessionId: session.id,
+      voiceId: session.clonedVoiceId,
+      transcriptCount: session.transcripts.length,
+      userName: session.userName
+    });
+    
+    const assistantId = await createFutureSelfAssistant(session);
+    
+    // Update session
+    session.futureSelfAssistantId = assistantId;
+    session.futureSelfCreated = true;
+    sessions.set(session.id, session);
+    
+    console.log('🎭✅ Future Self assistant created successfully!');
+    console.log(`🆔 Assistant ID: ${assistantId}`);
+    console.log('🚀 Future Self callback system is now ready!');
+    
+  } catch (error) {
+    console.error('❌ Failed to create Future Self assistant:', error);
+  }
 }
 
 async function handleConversationUpdate(call: VapiCall, conversation: Array<{ role: string; content: string }>) {
@@ -387,59 +429,103 @@ async function handleConversationUpdate(call: VapiCall, conversation: Array<{ ro
     
     if (!session) return;
 
-    // Look for user messages in the conversation to extract information
-    const userMessages = conversation.filter(msg => msg.role === 'user' || msg.role === 'assistant');
+    // Update transcripts with new conversation messages
+    for (const msg of conversation) {
+      // Check if this message is already in our transcripts
+      const exists = session.transcripts.some(t => 
+        t.text === msg.content && t.role === (msg.role as 'user' | 'assistant')
+      );
+      
+      if (!exists && msg.content && msg.content.trim().length > 0) {
+        session.transcripts.push({
+          role: msg.role as 'user' | 'assistant',
+          text: msg.content.trim(),
+          timestamp: Date.now()
+        });
+        
+        devLog(`📝 Added ${msg.role} message to transcript:`, msg.content.substring(0, 100));
+      }
+    }
+
+    // Extract user information from conversation
+    const userMessages = conversation.filter(msg => msg.role === 'user');
     
     for (const msg of userMessages) {
-      if (msg.role === 'user') {
-        // Extract user name from conversation
-        if (!session.userName && msg.content.length > 0) {
-          const nameMatch = msg.content.match(/my name is (\w+)|i'm (\w+)|i am (\w+)|call me (\w+)/i);
-          if (nameMatch) {
-            session.userName = nameMatch[1] || nameMatch[2] || nameMatch[3] || nameMatch[4];
-            devLog('Captured user name from conversation:', session.userName);
-          }
+      // Extract user name from conversation
+      if (!session.userName && msg.content.length > 0) {
+        const nameMatch = msg.content.match(/my name is (\w+)|i'm (\w+)|i am (\w+)|call me (\w+)/i);
+        if (nameMatch) {
+          session.userName = nameMatch[1] || nameMatch[2] || nameMatch[3] || nameMatch[4];
+          devLog('👤 Captured user name from conversation:', session.userName);
         }
+      }
 
-        // Capture problem description from longer messages
-        if (!session.problemDescription && msg.content.length > 50) {
-          session.problemDescription = msg.content;
-          devLog('Captured problem description from conversation');
-        }
+      // Capture problem description from longer messages
+      if (!session.problemDescription && msg.content.length > 50) {
+        session.problemDescription = msg.content;
+        devLog('📋 Captured problem description from conversation');
       }
     }
 
     sessions.set(sessionId, session);
+    
+    // Log transcript progress
+    if (session.transcripts.length > 0 && session.transcripts.length % 5 === 0) {
+      console.log(`📊 Transcript progress: ${session.transcripts.length} messages collected for Future Self`);
+    }
+    
   } catch (error) {
     prodLog('❌ Error in handleConversationUpdate:', error);
   }
 }
 
 async function handleTranscript(call: VapiCall, data: { role: string; transcript: string }) {
-  const sessionId = call?.metadata?.sessionId || call?.id;
-  const session = sessions.get(sessionId);
-  
-  if (!session || data.role !== 'user') return;
+  try {
+    const sessionId = call?.metadata?.sessionId || call?.id;
+    const session = sessions.get(sessionId);
+    
+    if (!session || !data.transcript || data.transcript.trim().length === 0) return;
 
-  const transcript = data.transcript;
-  if (!transcript) return;
-
-  // Extract user name from early conversation
-  if (!session.userName && transcript.length > 0) {
-    const nameMatch = transcript.match(/my name is (\w+)|i'm (\w+)|i am (\w+)|call me (\w+)/i);
-    if (nameMatch) {
-      session.userName = nameMatch[1] || nameMatch[2] || nameMatch[3] || nameMatch[4];
-      devLog('Captured user name from transcript:', session.userName);
+    const transcript = data.transcript.trim();
+    
+    // Add transcript to session
+    const exists = session.transcripts.some(t => 
+      t.text === transcript && t.role === (data.role as 'user' | 'assistant')
+    );
+    
+    if (!exists) {
+      session.transcripts.push({
+        role: data.role as 'user' | 'assistant',
+        text: transcript,
+        timestamp: Date.now()
+      });
+      
+      devLog(`📝 Added ${data.role} transcript:`, transcript.substring(0, 100));
     }
-  }
 
-  // Capture problem description from longer messages
-  if (!session.problemDescription && transcript.length > 50) {
-    session.problemDescription = transcript;
-    devLog('Captured problem description from transcript');
-  }
+    // Extract user information from transcripts
+    if (data.role === 'user') {
+      // Extract user name from early conversation
+      if (!session.userName && transcript.length > 0) {
+        const nameMatch = transcript.match(/my name is (\w+)|i'm (\w+)|i am (\w+)|call me (\w+)/i);
+        if (nameMatch) {
+          session.userName = nameMatch[1] || nameMatch[2] || nameMatch[3] || nameMatch[4];
+          devLog('👤 Captured user name from transcript:', session.userName);
+        }
+      }
 
-  sessions.set(sessionId, session);
+      // Capture problem description from longer messages
+      if (!session.problemDescription && transcript.length > 50) {
+        session.problemDescription = transcript;
+        devLog('📋 Captured problem description from transcript');
+      }
+    }
+
+    sessions.set(sessionId, session);
+    
+  } catch (error) {
+    prodLog('❌ Error in handleTranscript:', error);
+  }
 }
 
 async function handleCallEnded(call: VapiCall) {
@@ -457,83 +543,30 @@ async function handleCallEnded(call: VapiCall) {
     }
   }
   
+  // Clear the Future Self timer if it exists
+  if (session?.futureSelfTimer) {
+    clearTimeout(session.futureSelfTimer);
+    devLog('⏰ Cleared Future Self timer');
+  }
+  
   if (!session) return;
 
   session.status = 'processing';
   sessions.set(sessionId, session);
   
-  console.log('Call ended, starting voice cloning process...', {
+  console.log('🔴 Call ended, final session state:', {
     sessionId,
-    hasRecording: !!session.recordingUrl,
+    transcriptCount: session.transcripts.length,
     userName: session.userName,
-    hasProblem: !!session.problemDescription
+    voiceCloneCompleted: session.voiceCloneCompleted,
+    futureSelfCreated: session.futureSelfCreated,
+    assistantId: session.futureSelfAssistantId
   });
 
-  // Trigger voice cloning and callback process
-  try {
-    await processVoiceCloning(session);
-  } catch (error) {
-    console.error('Voice cloning process failed:', error);
-    session.status = 'error';
-    sessions.set(sessionId, session);
-  }
-}
-
-async function processVoiceCloning(session: UserSession) {
-  if (!session.recordingUrl) {
-    throw new Error('No recording URL available');
-  }
-
-  try {
-    // Step 1: Clone voice using ElevenLabs
-    console.log('Starting voice cloning...');
-    const cloneResponse = await fetch('/api/elevenlabs/clone-voice', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: session.id,
-        recordingUrl: session.recordingUrl,
-        name: session.userName || 'User'
-      })
-    });
-
-    if (!cloneResponse.ok) {
-      throw new Error('Voice cloning failed');
-    }
-
-    const cloneData = await cloneResponse.json();
-    session.clonedVoiceId = cloneData.voice_id;
-    session.status = 'calling_back';
-    
-    console.log('Voice cloned successfully:', cloneData.voice_id);
-
-    // Step 2: Create future self assistant and initiate callback
-    console.log('Creating future self assistant...');
-    const callbackResponse = await fetch('/api/vapi/create-future-self', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: session.id,
-        voiceId: session.clonedVoiceId,
-        userName: session.userName,
-        problemDescription: session.problemDescription
-      })
-    });
-
-    if (!callbackResponse.ok) {
-      throw new Error('Future self creation failed');
-    }
-
-    session.status = 'completed';
-    sessions.set(session.id, session);
-    
-    console.log('Future self callback initiated successfully');
-
-  } catch (error) {
-    console.error('Processing error:', error);
-    session.status = 'error';
-    sessions.set(session.id, session);
-    throw error;
+  // If Future Self wasn't created yet due to timing, try one more time
+  if (!session.futureSelfCreated && session.voiceCloneCompleted && session.clonedVoiceId) {
+    console.log('🎭 Call ended - attempting final Future Self creation...');
+    await createFutureSelfForSession(session);
   }
 }
 
