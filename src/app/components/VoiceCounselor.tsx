@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Vapi from '@vapi-ai/web';
-import { CallState } from '../types';
+import { VoiceCallState } from '../types';
 
 interface VapiError {
   error?: {
@@ -21,7 +21,7 @@ interface VapiMessage {
 }
 
 const VoiceCounselor = () => {
-  const [callState, setCallState] = useState<CallState>({
+  const [callState, setCallState] = useState<VoiceCallState>({
     isConnected: false,
     isLoading: false,
     status: 'Ready to connect',

@@ -7,6 +7,7 @@ export interface UserSession {
   clonedVoiceId?: string;
   callId?: string;
   status: 'initializing' | 'counseling' | 'processing' | 'calling_back' | 'completed' | 'error';
+  callState: CallState;
   createdAt: Date;
   futureSelfReady?: boolean;
   futureSelfAssistantId?: string;
@@ -41,7 +42,9 @@ export interface ElevenLabsVoiceClone {
   status: 'ready' | 'processing' | 'error';
 }
 
-export interface CallState {
+export type CallState = 'onboarding' | 'preparing_interruption' | 'interruption_delivered' | 'ready_for_future_call';
+
+export interface VoiceCallState {
   isConnected: boolean;
   isLoading: boolean;
   status: string;

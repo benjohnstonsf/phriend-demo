@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { UserSession } from '../../../types';
 import { VapiAudioCapture } from '../../../lib/audioCapture';
 import { createFutureSelfAssistant } from '../../../lib/vapiHelpers';
+import { SessionManager } from '../../../lib/sessionManager';
 
-// In-memory session storage (use Redis in production)
-const sessions = new Map<string, UserSession>();
+// Use SessionManager instead of in-memory storage
+const sessionManager = SessionManager.getInstance();
 
 // Store active audio captures
 const audioCaptures = new Map<string, VapiAudioCapture>();
@@ -203,26 +204,34 @@ async function handleCallStarted(call: VapiCall) {
       return;
     }
     
-    const session: UserSession = {
-      id: sessionId,
-      callId: call?.id,
-      status: 'counseling',
-      createdAt: new Date(),
-      
-      // Initialize new fields for Future Self creation
-      startTime: Date.now(),
-      transcripts: [],
-      voiceCloneCompleted: false,
-      futureSelfCreated: false,
-    };
-    
-    // Set 30-second timer for Future Self creation
+    // Use SessionManager to create session with proper callState initialization
+    const session = sessionManager.createSession(sessionId, call?.id);
+
+    // Set up call state timing progression
+    // 0-55s: 'onboarding'
+    // 55-60s: 'preparing_interruption' 
+    // 60-65s: 'interruption_delivered'
+    // 65s+: 'ready_for_future_call'
+
+    // Schedule state transitions
+    setTimeout(() => {
+      sessionManager.updateCallState(sessionId, 'preparing_interruption');
+    }, 55000); // 55 seconds
+
+    // Set 60-second timer for Future Self creation (was 30 seconds before)
     const futureSelfTimer = setTimeout(async () => {
-      console.log('⏰ 30 seconds elapsed - triggering Future Self creation...');
+      console.log('⏰ 60 seconds elapsed - triggering Future Self creation...');
+      sessionManager.updateCallState(sessionId, 'interruption_delivered');
       await triggerFutureSelfCreation(sessionId);
-    }, 30000); // 30 seconds
-    
-    session.futureSelfTimer = futureSelfTimer;
+      
+      // Schedule transition to ready state after 5 more seconds
+      setTimeout(() => {
+        sessionManager.updateCallState(sessionId, 'ready_for_future_call');
+      }, 5000);
+    }, 60000); // 60 seconds
+
+    // Update session with timer
+    sessionManager.updateSession(sessionId, { futureSelfTimer });
     
     // Store monitor URLs for audio streaming in Step 2
     if (call?.monitor?.listenUrl) {
@@ -280,11 +289,11 @@ async function handleCallStarted(call: VapiCall) {
               const cloneData = await cloneResponse.json();
               
               // Update session with cloned voice ID
-              const currentSession = sessions.get(sessionId);
+              const currentSession = sessionManager.getSession(sessionId);
               if (currentSession) {
                 currentSession.clonedVoiceId = cloneData.voice_id;
                 currentSession.voiceCloneCompleted = true;
-                sessions.set(sessionId, currentSession);
+                sessionManager.updateSession(sessionId, currentSession);
                 
                 console.log(`✅ Real-time voice cloning completed: ${cloneData.voice_id}`);
                 console.log('🚀 Voice clone ready! Waiting for 60-second mark for Future Self creation...');
@@ -339,7 +348,7 @@ async function handleCallStarted(call: VapiCall) {
       devLog('   Available call data:', call);
     }
     
-    sessions.set(sessionId, session);
+    sessionManager.updateSession(sessionId, session);
     devLog('✅ Session started:', sessionId);
     prodLog('🎯 New session created', { sessionId, callId: call?.id });
     
@@ -351,7 +360,7 @@ async function handleCallStarted(call: VapiCall) {
 // NEW: Function to trigger Future Self creation
 async function triggerFutureSelfCreation(sessionId: string) {
   try {
-    const session = sessions.get(sessionId);
+    const session = sessionManager.getSession(sessionId);
     if (!session) {
       console.error('❌ Session not found for Future Self creation:', sessionId);
       return;
@@ -371,7 +380,7 @@ async function triggerFutureSelfCreation(sessionId: string) {
       
       // Set up a polling mechanism to check every 5 seconds
       const pollInterval = setInterval(async () => {
-        const updatedSession = sessions.get(sessionId);
+        const updatedSession = sessionManager.getSession(sessionId);
         if (updatedSession?.voiceCloneCompleted && updatedSession.clonedVoiceId) {
           clearInterval(pollInterval);
           console.log('✅ Voice clone now ready, proceeding with Future Self creation...');
@@ -411,7 +420,7 @@ async function createFutureSelfForSession(session: UserSession) {
     // Update session
     session.futureSelfAssistantId = assistantId;
     session.futureSelfCreated = true;
-    sessions.set(session.id, session);
+    sessionManager.updateSession(session.id, session);
     
     console.log('🎭✅ Future Self assistant created successfully!');
     console.log(`🆔 Assistant ID: ${assistantId}`);
@@ -425,7 +434,7 @@ async function createFutureSelfForSession(session: UserSession) {
 async function handleConversationUpdate(call: VapiCall, conversation: Array<{ role: string; content: string }>) {
   try {
     const sessionId = call?.metadata?.sessionId || call?.id;
-    const session = sessions.get(sessionId);
+    const session = sessionManager.getSession(sessionId);
     
     if (!session) return;
 
@@ -467,7 +476,7 @@ async function handleConversationUpdate(call: VapiCall, conversation: Array<{ ro
       }
     }
 
-    sessions.set(sessionId, session);
+    sessionManager.updateSession(sessionId, session);
     
     // Log transcript progress
     if (session.transcripts.length > 0 && session.transcripts.length % 5 === 0) {
@@ -482,7 +491,7 @@ async function handleConversationUpdate(call: VapiCall, conversation: Array<{ ro
 async function handleTranscript(call: VapiCall, data: { role: string; transcript: string }) {
   try {
     const sessionId = call?.metadata?.sessionId || call?.id;
-    const session = sessions.get(sessionId);
+    const session = sessionManager.getSession(sessionId);
     
     if (!session || !data.transcript || data.transcript.trim().length === 0) return;
 
@@ -521,7 +530,7 @@ async function handleTranscript(call: VapiCall, data: { role: string; transcript
       }
     }
 
-    sessions.set(sessionId, session);
+    sessionManager.updateSession(sessionId, session);
     
   } catch (error) {
     prodLog('❌ Error in handleTranscript:', error);
@@ -530,7 +539,7 @@ async function handleTranscript(call: VapiCall, data: { role: string; transcript
 
 async function handleCallEnded(call: VapiCall) {
   const sessionId = call?.metadata?.sessionId || call?.id;
-  const session = sessions.get(sessionId);
+  const session = sessionManager.getSession(sessionId);
   
   // Clean up audio capture first
   if (call?.id) {
@@ -552,7 +561,7 @@ async function handleCallEnded(call: VapiCall) {
   if (!session) return;
 
   session.status = 'processing';
-  sessions.set(sessionId, session);
+  sessionManager.updateSession(sessionId, session);
   
   console.log('🔴 Call ended, final session state:', {
     sessionId,
@@ -579,7 +588,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Session ID required' }, { status: 400 });
   }
   
-  const session = sessions.get(sessionId);
+  const session = sessionManager.getSession(sessionId);
   if (!session) {
     return NextResponse.json({ error: 'Session not found' }, { status: 404 });
   }
