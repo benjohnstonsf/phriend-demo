@@ -33,7 +33,7 @@ export class VapiAudioCapture extends EventEmitter {
   // Real-time voice cloning properties
   private voiceCloneTriggered = false;
   private audioStartTime: Date | null = null;
-  private minSecondsForCloning = 15; // Minimum seconds before triggering voice cloning
+  private minSecondsForCloning = 30; // Minimum seconds before triggering voice cloning
   private sessionId: string;
   private userName: string;
   
