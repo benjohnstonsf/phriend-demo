@@ -218,7 +218,8 @@ async function handleCallStarted(call: VapiCall) {
       sessionManager.updateCallState(sessionId, 'preparing_interruption');
     }, 55000); // 55 seconds
 
-    // Set 60-second timer for Future Self creation (was 30 seconds before)
+    // 🎯 DISABLED: Now creating Future Self immediately when voice clone is ready
+    /*
     const futureSelfTimer = setTimeout(async () => {
       console.log('⏰ 60 seconds elapsed - triggering Future Self creation...');
       sessionManager.updateCallState(sessionId, 'interruption_delivered');
@@ -232,6 +233,7 @@ async function handleCallStarted(call: VapiCall) {
 
     // Update session with timer
     sessionManager.updateSession(sessionId, { futureSelfTimer });
+    */
     
     // Store monitor URLs for audio streaming in Step 2
     if (call?.monitor?.listenUrl) {
@@ -296,7 +298,17 @@ async function handleCallStarted(call: VapiCall) {
                 sessionManager.updateSession(sessionId, currentSession);
                 
                 console.log(`✅ Real-time voice cloning completed: ${cloneData.voice_id}`);
-                console.log('🚀 Voice clone ready! Waiting for 60-second mark for Future Self creation...');
+                console.log('🎭 Voice clone ready! Creating Future Self assistant immediately...');
+                
+                // 🎯 NEW: Create Future Self assistant immediately when voice clone is ready
+                await triggerFutureSelfCreation(sessionId);
+                
+                // Clear fallback timer since voice clone succeeded
+                if (currentSession.fallbackTimer) {
+                  clearTimeout(currentSession.fallbackTimer);
+                  currentSession.fallbackTimer = undefined;
+                  sessionManager.updateSession(sessionId, currentSession);
+                }
               }
               
             } else {
@@ -348,6 +360,18 @@ async function handleCallStarted(call: VapiCall) {
       devLog('   Available call data:', call);
     }
     
+    // 🎯 IMPROVED: Add fallback timer in case voice cloning fails or takes too long
+    const fallbackTimer = setTimeout(async () => {
+      console.log('⏰ 30 seconds elapsed - checking if Future Self needs to be created...');
+      const currentSession = sessionManager.getSession(sessionId);
+      if (currentSession && !currentSession.futureSelfCreated) {
+        console.log('🔄 Creating Future Self with fallback (voice clone may not be ready)...');
+        await triggerFutureSelfCreation(sessionId);
+      }
+    }, 30000); // 30 second fallback
+
+    // Update session with fallback timer for cleanup
+    session.fallbackTimer = fallbackTimer;
     sessionManager.updateSession(sessionId, session);
     devLog('✅ Session started:', sessionId);
     prodLog('🎯 New session created', { sessionId, callId: call?.id });
@@ -399,6 +423,14 @@ async function triggerFutureSelfCreation(sessionId: string) {
     
     // Voice clone is ready, create Future Self immediately
     await createFutureSelfForSession(session);
+    
+    // Update call state to indicate Future Self is ready
+    sessionManager.updateCallState(sessionId, 'interruption_delivered');
+    
+    // Schedule transition to ready state after 5 seconds
+    setTimeout(() => {
+      sessionManager.updateCallState(sessionId, 'ready_for_future_call');
+    }, 5000);
     
   } catch (error) {
     console.error('❌ Error triggering Future Self creation:', error);
@@ -556,6 +588,12 @@ async function handleCallEnded(call: VapiCall) {
   if (session?.futureSelfTimer) {
     clearTimeout(session.futureSelfTimer);
     devLog('⏰ Cleared Future Self timer');
+  }
+  
+  // Clear the fallback timer if it exists
+  if (session?.fallbackTimer) {
+    clearTimeout(session.fallbackTimer);
+    devLog('⏰ Cleared fallback timer');
   }
   
   if (!session) return;

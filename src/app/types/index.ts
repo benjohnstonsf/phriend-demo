@@ -22,6 +22,7 @@ export interface UserSession {
   voiceCloneCompleted: boolean;
   futureSelfCreated: boolean;
   futureSelfTimer?: NodeJS.Timeout;
+  fallbackTimer?: NodeJS.Timeout;
 }
 
 export interface VapiWebhookEvent {

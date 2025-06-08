@@ -17,6 +17,12 @@ export interface VapiAssistantConfig {
   firstMessage: string;
   endCallPhrases: string[];
   recordingEnabled?: boolean;
+  metadata?: {
+    originalCallId?: string;
+    type?: string;
+    createdAt?: number;
+    [key: string]: unknown;
+  };
 }
 
 export async function createFutureSelfAssistant(session: UserSession): Promise<string> {
@@ -66,7 +72,13 @@ export async function createFutureSelfAssistant(session: UserSession): Promise<s
     },
     firstMessage: "Hello... uh, I mean, me. This is strange for both of us, but I need you to listen...",
     endCallPhrases: ["goodbye", "talk to you later", "bye", "thank you"],
-    recordingEnabled: true
+    recordingEnabled: true,
+    metadata: {
+      originalCallId: session.callId,
+      type: 'future_self',
+      createdAt: Date.now(),
+      sessionId: session.id
+    }
   };
 
   console.log('🎭 Creating Future Self assistant with config:', {
