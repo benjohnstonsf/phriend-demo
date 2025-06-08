@@ -37,12 +37,23 @@ export class VapiAudioCapture extends EventEmitter {
   private sessionId: string;
   private userName: string;
   
+  // Enhanced sample rate detection
+  private detectedSampleRate: number = 24000; // Default to Vapi's common rate
+  private sampleRateDetected: boolean = false;
+  private chunkSizeHistory: number[] = [];
+  private audioFormatFromMetadata: any = null;
+  
   constructor(callId: string, sessionId: string, userName: string = 'User', maxBufferSize = 1000) {
     super();
     this.callId = callId;
     this.sessionId = sessionId;
     this.userName = userName;
     this.maxBufferSize = maxBufferSize;
+    
+    // 🧪 TEMPORARY: Force 48kHz for testing
+    this.detectedSampleRate = 48000;
+    this.sampleRateDetected = true;
+    console.log('🧪 TESTING: Forcing 48kHz sample rate');
   }
   
   async connect(listenUrl: string, timeoutMs = 10000) {
@@ -122,7 +133,7 @@ export class VapiAudioCapture extends EventEmitter {
   private handleMessage(data: Buffer | string) {
     if (data instanceof Buffer) {
       // This is audio data!
-      this.analyzeAudioFormat(data); // Add audio format debugging
+      this.analyzeAudioFormat(data);
       this.audioChunksReceived++;
       this.totalAudioBytes += data.length;
       
@@ -146,13 +157,13 @@ export class VapiAudioCapture extends EventEmitter {
         console.log(`🎵 Received ${this.audioChunksReceived} audio chunks, latest size: ${data.length} bytes, total: ${this.totalAudioBytes} bytes`);
       }
       
-      // 🎭 TIME-BASED REAL-TIME VOICE CLONING CHECK
+      // TIME-BASED REAL-TIME VOICE CLONING CHECK
       if (!this.voiceCloneTriggered && this.audioStartTime) {
         const secondsElapsed = (Date.now() - this.audioStartTime.getTime()) / 1000;
         
         if (secondsElapsed >= this.minSecondsForCloning) {
           this.voiceCloneTriggered = true;
-          console.log(`🎭 15 seconds of audio captured! Triggering real-time voice cloning...`);
+          console.log(`🎭 ${this.minSecondsForCloning} seconds of audio captured! Triggering real-time voice cloning...`);
           this.triggerRealTimeVoiceCloning();
         }
       }
@@ -164,9 +175,18 @@ export class VapiAudioCapture extends EventEmitter {
       try {
         const message: VapiWebSocketMessage = JSON.parse(data.toString());
         
-        // Look for audio format information in metadata
-        if (message.type === 'audio-format' || message.format) {
-          console.log('📊 Audio format detected:', message);
+        // 🔧 ENHANCED: Look for audio format information in metadata
+        if (message.type === 'audio-format' || message.format || message.sampleRate) {
+          console.log('📊 Audio format detected in metadata:', message);
+          this.audioFormatFromMetadata = message;
+          
+          // Extract sample rate from metadata if available
+          if (message.sampleRate) {
+            this.detectedSampleRate = message.sampleRate as number;
+            this.sampleRateDetected = true;
+            console.log(`🎯 Sample rate from metadata: ${this.detectedSampleRate}Hz`);
+          }
+          
           this.emit('audioFormat', message);
         }
         
@@ -178,8 +198,19 @@ export class VapiAudioCapture extends EventEmitter {
     }
   }
   
-  // Add this debug method to analyze audio format
+  // 🔧 ENHANCED: More robust audio format analysis
   private analyzeAudioFormat(data: Buffer) {
+    // Skip non-audio chunks (like JSON metadata)
+    if (data.length < 1000) {
+      console.log(`📦 Skipping small chunk (likely metadata): ${data.length} bytes`);
+      return;
+    }
+    
+    // Track chunk sizes for pattern detection
+    if (this.chunkSizeHistory.length < 10) {
+      this.chunkSizeHistory.push(data.length);
+    }
+    
     // Log first few audio chunks in detail
     if (this.audioChunksReceived <= 5) {
       console.log(`\n🔍 Audio Chunk Analysis #${this.audioChunksReceived}:`);
@@ -187,16 +218,53 @@ export class VapiAudioCapture extends EventEmitter {
       console.log(`- First 20 bytes (hex):`, data.slice(0, 20).toString('hex'));
       console.log(`- First 10 samples (16-bit LE):`, Array.from(new Int16Array(data.slice(0, 20).buffer)));
       
-      // Check if it's stereo by looking at pattern
+      // 🔧 ENHANCED: Check for silent channel pattern
       const samples = new Int16Array(data.buffer);
-      let possibleStereo = true;
-      for (let i = 0; i < Math.min(samples.length - 2, 100); i += 2) {
-        if (samples[i] !== 0 && samples[i + 1] !== 0) {
-          possibleStereo = true;
-          break;
-        }
+      let channel0HasData = false;
+      let channel1HasData = false;
+      
+      // Check first 100 sample pairs
+      for (let i = 0; i < Math.min(samples.length - 1, 200); i += 2) {
+        if (Math.abs(samples[i]) > 10) channel0HasData = true;
+        if (Math.abs(samples[i + 1]) > 10) channel1HasData = true;
       }
-      console.log(`- Possible stereo: ${possibleStereo}`);
+      
+      console.log(`- Channel 0 has data: ${channel0HasData}`);
+      console.log(`- Channel 1 has data: ${channel1HasData}`);
+      console.log(`- Appears to be: ${channel0HasData && channel1HasData ? 'True Stereo' : 'Mono in Stereo Container'}`);
+    }
+    
+    // 🔧 ENHANCED: Auto-detect sample rate from consistent chunk sizes
+    if (!this.sampleRateDetected && this.chunkSizeHistory.length >= 5) {
+      const avgChunkSize = this.chunkSizeHistory.reduce((a, b) => a + b, 0) / this.chunkSizeHistory.length;
+      const isConsistent = this.chunkSizeHistory.every(size => Math.abs(size - avgChunkSize) < 50);
+      
+      if (isConsistent) {
+        console.log(`🔍 Analyzing chunk pattern: ${avgChunkSize.toFixed(0)} bytes average`);
+        
+        if (Math.abs(avgChunkSize - 3840) < 50) {
+          // 3840 bytes = 1920 samples (16-bit) = 960 samples per channel (stereo)
+          // At 20ms intervals: 960 samples / 0.02s = 48,000 Hz
+          this.detectedSampleRate = 48000;
+          console.log(`🎯 Detected 48kHz based on consistent 3840-byte chunks`);
+        } else if (Math.abs(avgChunkSize - 1920) < 50) {
+          this.detectedSampleRate = 24000; // 24kHz stereo at 20ms
+          console.log(`🎯 Detected 24kHz based on ~1920-byte chunks`);
+        } else if (Math.abs(avgChunkSize - 1280) < 50) {
+          // Could be 16kHz at 40ms or 24kHz at ~26.7ms
+          this.detectedSampleRate = 24000; // Default to Vapi's common rate
+          console.log(`🎯 Detected 24kHz based on consistent 1280-byte chunks (Vapi standard)`);
+        } else if (Math.abs(avgChunkSize - 640) < 50) {
+          this.detectedSampleRate = 16000; // 16kHz stereo at 20ms
+          console.log(`🎯 Detected 16kHz based on ~640-byte chunks`);
+        } else {
+          console.log(`⚠️ Unusual chunk size pattern: ${avgChunkSize} bytes - defaulting to 48kHz based on recent observations`);
+          this.detectedSampleRate = 48000; // Updated default based on your logs
+        }
+        
+        this.sampleRateDetected = true;
+        console.log(`📊 Final detection: ${this.detectedSampleRate}Hz from ${avgChunkSize.toFixed(0)}-byte chunks`);
+      }
     }
   }
   
@@ -213,8 +281,18 @@ export class VapiAudioCapture extends EventEmitter {
       const userAudio = this.extractUserChannel(audioForCloning);
       console.log(`📦 Extracted user audio: ${userAudio.length} bytes from ${audioForCloning.length} chunks`);
       
-      // Create WAV file with correct sample rate
-      const wavFile = this.createWAVFile(userAudio, 16000); // Keep at 16kHz for now
+      // 🔧 USE DETECTED SAMPLE RATE with fallback logic
+      let finalSampleRate = this.detectedSampleRate;
+      
+      // If we have metadata, prefer that
+      if (this.audioFormatFromMetadata?.sampleRate) {
+        finalSampleRate = this.audioFormatFromMetadata.sampleRate;
+        console.log(`🎵 Using sample rate from metadata: ${finalSampleRate}Hz`);
+      } else {
+        console.log(`🎵 Using detected sample rate: ${finalSampleRate}Hz`);
+      }
+      
+      const wavFile = this.createWAVFile(userAudio, finalSampleRate);
       
       // Convert to blob
       const audioBlob = new Blob([wavFile], { type: 'audio/wav' });
@@ -228,7 +306,9 @@ export class VapiAudioCapture extends EventEmitter {
         stats: {
           chunks: audioForCloning.length,
           bytes: userAudio.length,
-          duration: Math.round((Date.now() - this.audioStartTime!.getTime()) / 1000)
+          duration: Math.round((Date.now() - this.audioStartTime!.getTime()) / 1000),
+          sampleRate: finalSampleRate,
+          chunkSizeHistory: this.chunkSizeHistory
         }
       });
       
@@ -236,6 +316,13 @@ export class VapiAudioCapture extends EventEmitter {
       console.error('❌ Voice cloning trigger failed:', error);
       this.emit('voiceCloneError', error);
     }
+  }
+  
+  // 🔧 ENHANCED: Add method to manually set sample rate if needed
+  setSampleRate(sampleRate: number) {
+    this.detectedSampleRate = sampleRate;
+    this.sampleRateDetected = true;
+    console.log(`🎛️ Sample rate manually set to: ${sampleRate}Hz`);
   }
   
   // New method to extract user channel from stereo PCM
