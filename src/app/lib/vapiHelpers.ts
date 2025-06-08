@@ -47,7 +47,7 @@ export async function createFutureSelfAssistant(session: UserSession): Promise<s
     voiceConfig = {
       provider: '11labs',
       voiceId: session.clonedVoiceId,
-      stability: 0.8,
+      stability: 0.95,
       similarityBoost: 0.75
     };
     console.log('🎭 Attempting to use cloned ElevenLabs voice:', session.clonedVoiceId);
@@ -70,7 +70,7 @@ export async function createFutureSelfAssistant(session: UserSession): Promise<s
       systemPrompt: systemPrompt,
       temperature: 0.8
     },
-    firstMessage: "Hello... uh, I mean, me. This is strange for both of us, but I need you to listen...",
+    firstMessage: `Hello ${session.userName || 'you'}... uh ... I mean, me. This is going to be strange to hear but I'm you. I'm calling from the future. I went through what you're going through now and want to help you through this moment. Does that sound ok?`,
     endCallPhrases: ["goodbye", "talk to you later", "bye", "thank you"],
     recordingEnabled: true,
     metadata: {
