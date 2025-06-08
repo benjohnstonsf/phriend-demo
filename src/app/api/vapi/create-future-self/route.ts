@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         name: `Future Self - ${userName || 'User'} - ${sessionId}`,
+        firstMessage: `Hello ${userName || 'you'}... uh ... I mean, me. This is going to be strange to hear but I'm you. I'm calling from the future. I went through what you're going through now and want to help you through this moment. Does that sound ok?`,
         model: {
           provider: 'openai',
           model: 'gpt-4o-mini',
