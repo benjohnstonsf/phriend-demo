@@ -4,20 +4,48 @@ A magical web application where users can talk to an AI counselor about their pr
 
 ## Features
 
-- 🎙️ **Voice Counseling**: Talk to an empathetic AI counselor about your problems
-- 🔊 **Voice Cloning**: Captures and clones your voice during the conversation using ElevenLabs
-- 📞 **Future Self Callback**: Creates a personalized assistant that speaks in your voice as your "future self"
-- 💫 **Magical Experience**: Seamless flow from counseling to receiving wisdom from yourself
-- 🛡️ **Privacy Focused**: Voice clones are temporary and deleted after use
+- 🎯 **AI Counseling**: Initial therapeutic conversation with AI assistant
+- 🎧 **Real-time Audio Capture**: Captures live audio during the conversation
+- 🔊 **Voice Cloning**: Captures and clones your voice during the conversation using PlayHT
+- 🎭 **Future Self Creation**: Creates an AI assistant using your cloned voice
+- 📞 **Callback System**: Calls you back as your future self
+- 🧠 **Contextual Memory**: Future self remembers your conversation and provides personalized advice
 
-## Tech Stack
+## Technology Stack
 
-- **Frontend**: Next.js 15, React 19, TypeScript, Tailwind CSS
-- **Voice AI**: Vapi for voice conversations
-- **Voice Cloning**: ElevenLabs instant voice cloning
-- **Backend**: Next.js API Routes
+- **Frontend**: Next.js 14 with TypeScript and Tailwind CSS  
+- **Voice AI**: Vapi.ai for conversational AI
+- **Voice Cloning**: PlayHT instant voice cloning
+- **Real-time Audio**: WebSocket audio capture and processing
+- **Deployment**: Vercel-ready with proper environment configuration
+
+## Environment Variables
+
+Create a `.env.local` file with the following:
+
+```bash
+# Vapi Configuration  
+VAPI_API_KEY=your_vapi_api_key_here
+VAPI_PHONE_NUMBER_ID=your_phone_number_id_here
+
+# PlayHT Configuration
+PLAYHT_USER_ID=your_playht_user_id_here
+PLAYHT_SECRET_KEY=your_playht_secret_key_here
+
+# Application
+NEXT_PUBLIC_BASE_URL=http://localhost:3000
+```
 
 ## Setup Instructions
+
+### Required API Keys
+
+#### PlayHT Setup
+1. Go to [PlayHT](https://play.ht)
+2. Sign up for an account
+3. Navigate to API Keys section
+4. Copy your User ID (for `PLAYHT_USER_ID`)
+5. Copy your Secret Key (for `PLAYHT_SECRET_KEY`)
 
 ### 1. Clone and Install Dependencies
 
@@ -37,26 +65,15 @@ VAPI_API_KEY=your_vapi_api_key_here
 NEXT_PUBLIC_VAPI_PUBLIC_KEY=your_vapi_public_key_here
 VAPI_WEBHOOK_SECRET=your_vapi_webhook_secret_here
 
-# ElevenLabs Configuration
-ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+# PlayHT Configuration
+PLAYHT_USER_ID=your_playht_user_id_here
+PLAYHT_SECRET_KEY=your_playht_secret_key_here
 
 # App Configuration
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
-### 3. Get API Keys
-
-#### Vapi Setup
-1. Go to [Vapi Dashboard](https://dashboard.vapi.ai)
-2. Create an account and get your API keys
-3. Set up a webhook URL pointing to `your-domain.com/api/vapi/webhook`
-
-#### ElevenLabs Setup
-1. Go to [ElevenLabs](https://elevenlabs.io)
-2. Create an account and get your API key
-3. Ensure you have voice cloning credits available
-
-### 4. Run the Development Server
+### 3. Run the Development Server
 
 ```bash
 npm run dev
@@ -71,7 +88,7 @@ Open [http://localhost:3000](http://localhost:3000) to see the application.
 2. AI counselor greets them and asks about their problems
 3. During the conversation (2-3 minutes), audio is recorded
 4. When the call ends, the system:
-   - Clones the user's voice using ElevenLabs
+   - Clones the user's voice using PlayHT
    - Creates a "future self" assistant with the cloned voice
    - Generates a personalized prompt based on their problem
    - Initiates a callback (in production, would call their phone)
@@ -117,7 +134,7 @@ src/
 
 #### Voice Cloning API
 - Downloads audio from Vapi recordings
-- Creates instant voice clone with ElevenLabs
+- Creates instant voice clone with PlayHT
 - Returns voice ID for future use
 
 #### Future Self API
@@ -182,7 +199,7 @@ ngrok http 3000
 - Ensure HTTPS in production
 
 **Voice Cloning Fails**
-- Verify ElevenLabs API key and credits
+- Verify PlayHT API key and credits
 - Ensure recording quality is sufficient (30+ seconds)
 - Check audio format compatibility
 
@@ -212,5 +229,5 @@ MIT License - see LICENSE file for details
 
 For issues and questions:
 - Check the troubleshooting section
-- Review API documentation for Vapi and ElevenLabs
+- Review API documentation for Vapi and PlayHT
 - Open an issue on GitHub

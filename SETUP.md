@@ -17,32 +17,30 @@ Create a `.env.local` file in the root directory with these variables:
 
 # Vapi Configuration
 VAPI_API_KEY=your_vapi_api_key_here
-NEXT_PUBLIC_VAPI_PUBLIC_KEY=your_vapi_public_key_here
-VAPI_WEBHOOK_SECRET=your_vapi_webhook_secret_here
+VAPI_PHONE_NUMBER_ID=your_vapi_phone_number_id_here
 
-# ElevenLabs Configuration
-ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+# PlayHT Configuration
+PLAYHT_USER_ID=your_playht_user_id_here
+PLAYHT_SECRET_KEY=your_playht_secret_key_here
 
-# App Configuration
-NEXT_PUBLIC_APP_URL=http://localhost:3000
+# Application Configuration
+NEXT_PUBLIC_BASE_URL=http://localhost:3000
 ```
 
 ### 3. Get Your API Keys
 
 #### Vapi API Keys
 1. Go to [Vapi Dashboard](https://dashboard.vapi.ai)
+2. Create an account
+3. Navigate to your dashboard
+4. Copy your API key and Phone Number ID
+
+#### PlayHT API Keys
+1. Go to [PlayHT](https://play.ht)
 2. Sign up for an account
 3. Navigate to API Keys section
-4. Copy your **API Key** (for `VAPI_API_KEY`)
-5. Copy your **Public Key** (for `NEXT_PUBLIC_VAPI_PUBLIC_KEY`)
-6. Generate a webhook secret (for `VAPI_WEBHOOK_SECRET`)
-
-#### ElevenLabs API Key
-1. Go to [ElevenLabs](https://elevenlabs.io)
-2. Sign up for an account
-3. Go to your profile → API Keys
-4. Copy your API key (for `ELEVENLABS_API_KEY`)
-5. Make sure you have voice cloning credits available
+4. Copy your User ID (for `PLAYHT_USER_ID`)
+5. Copy your Secret Key (for `PLAYHT_SECRET_KEY`)
 
 ### 4. Run the App
 ```bash
@@ -90,18 +88,19 @@ Since Vapi needs to send webhooks to your app, you'll need to expose your local 
 ### Key Files Created:
 
 - **`src/app/components/VoiceCounselor.tsx`**: Main UI component with Vapi integration
-- **`src/app/api/vapi/webhook/route.ts`**: Handles Vapi webhook events
-- **`src/app/api/elevenlabs/clone-voice/route.ts`**: Voice cloning with ElevenLabs
-- **`src/app/api/vapi/create-future-self/route.ts`**: Creates future self assistant
+- **`src/app/api/vapi/webhook/route.ts`**: Main webhook handler for Vapi events
+- **`src/app/api/playht/clone-voice-realtime/route.ts`**: Voice cloning with PlayHT
+- **`src/app/lib/audioCapture.ts`**: Real-time audio capture and processing
+- **`src/app/lib/vapiHelpers.ts`**: Assistant creation and prompt building
 - **`src/app/types/index.ts`**: TypeScript interfaces
 
 ### The Magic Flow:
 
-1. **Voice Call**: User talks to AI counselor (Vapi Web SDK)
-2. **Webhook Processing**: Events are captured and processed
-3. **Voice Cloning**: Audio is sent to ElevenLabs for instant cloning
-4. **Future Self**: Personalized assistant created with cloned voice
-5. **Callback**: System prepares to call user back (demo logs this step)
+1. **Initial Call**: User calls your Vapi phone number
+2. **Counseling Session**: AI counselor asks about problems and provides guidance
+3. **Voice Cloning**: Audio is sent to PlayHT for instant cloning
+4. **Future Self**: Creates assistant with cloned voice and conversation context
+5. **Callback**: Calls user back as their "future self" with personalized advice
 
 ## Troubleshooting
 
@@ -112,15 +111,20 @@ Since Vapi needs to send webhooks to your app, you'll need to expose your local 
 - Verify `NEXT_PUBLIC_VAPI_PUBLIC_KEY` is correct
 - Ensure you're on HTTPS in production
 
-**Webhook Events Not Received**
-- Make sure ngrok is running and URL is correct
-- Check Vapi dashboard webhook configuration
-- Look for errors in terminal/console
+**Webhook Not Receiving Events**
+- Verify webhook URL is accessible from internet
+- Check VAPI_WEBHOOK_SECRET is set correctly
+- Ensure webhook endpoint returns 200 status
 
 **Voice Cloning Fails**
-- Verify ElevenLabs API key is valid
-- Ensure you have voice cloning credits
-- Check that recording is at least 30 seconds
+- Verify PlayHT API keys are correct
+- Ensure audio quality is sufficient (minimum 2 seconds, maximum 1 hour)
+- Check audio format compatibility
+
+**Future Self Not Calling Back**
+- Check assistant creation logs
+- Verify voice clone completed successfully
+- Ensure phone number format is correct
 
 **Environment Variables Not Loading**
 - Make sure file is named `.env.local` exactly
@@ -155,7 +159,7 @@ DEBUG=true
 
 - Check the main README.md for detailed documentation
 - Review Vapi documentation: [docs.vapi.ai](https://docs.vapi.ai)
-- Review ElevenLabs documentation: [elevenlabs.io/docs](https://elevenlabs.io/docs)
+- Review PlayHT documentation: [docs.play.ht](https://docs.play.ht)
 - Open an issue on GitHub if you get stuck
 
 ---

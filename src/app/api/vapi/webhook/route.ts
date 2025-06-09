@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
     });
     
     // Log the full payload for debugging Step 1 (dev only)
-    devLog('📦 Full message:', JSON.stringify(message, null, 2));
+    // devLog('📦 Full message:', JSON.stringify(message, null, 2));
 
     // Production logging for important events
     if (!isDevelopment && ['status-update', 'speech-update', 'conversation-update', 'transcript', 'end-of-call-report'].includes(type)) {
@@ -275,11 +275,11 @@ async function handleCallStarted(call: VapiCall) {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => {
             controller.abort();
-            console.log('⏰ Voice cloning communication timed out, but ElevenLabs may still be processing...');
+            console.log('⏰ Voice cloning communication timed out, but PlayHT may still be processing...');
           }, 900000); // 15 minute timeout
           
           try {
-            const cloneResponse = await fetch('http://localhost:3000/api/elevenlabs/clone-voice-realtime', {
+            const cloneResponse = await fetch('http://localhost:3000/api/playht/clone-voice-realtime', {
               method: 'POST',
               body: formData,
               signal: controller.signal,
@@ -320,7 +320,7 @@ async function handleCallStarted(call: VapiCall) {
             clearTimeout(timeoutId);
             const error = fetchError as Error;
             if (error.name === 'AbortError' || error.message.includes('timeout')) {
-              console.log('⚠️ Communication timeout occurred, but voice cloning may have succeeded at ElevenLabs');
+              console.log('⚠️ Communication timeout occurred, but voice cloning may have succeeded at PlayHT');
             } else {
               throw fetchError;
             }

@@ -37,7 +37,7 @@ export interface TranscriptMessage {
   timestamp: string;
 }
 
-export interface ElevenLabsVoiceClone {
+export interface PlayHTVoiceClone {
   voice_id: string;
   name: string;
   status: 'ready' | 'processing' | 'error';

@@ -7,6 +7,15 @@ interface VapiWebSocketMessage {
   [key: string]: unknown;
 }
 
+interface AudioFormatMetadata {
+  type?: string;
+  format?: string;
+  sampleRate?: number;
+  channels?: number;
+  bitDepth?: number;
+  [key: string]: unknown;
+}
+
 interface AudioCaptureStats {
   callId: string;
   audioChunksReceived: number;
@@ -41,7 +50,7 @@ export class VapiAudioCapture extends EventEmitter {
   private detectedSampleRate: number = 24000; // Default to Vapi's common rate
   private sampleRateDetected: boolean = false;
   private chunkSizeHistory: number[] = [];
-  private audioFormatFromMetadata: any = null;
+  private audioFormatFromMetadata: AudioFormatMetadata | null = null;
   
   constructor(callId: string, sessionId: string, userName: string = 'User', maxBufferSize = 1000) {
     super();

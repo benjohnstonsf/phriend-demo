@@ -3,7 +3,7 @@ import { UserSession } from '../types';
 export interface VapiAssistantConfig {
   name: string;
   voice: {
-    provider: '11labs' | 'vapi';
+    provider: 'playht' | 'vapi';
     voiceId: string;
     stability?: number;
     similarityBoost?: number;
@@ -36,21 +36,19 @@ export async function createFutureSelfAssistant(session: UserSession): Promise<s
   
   // Determine which voice to use
   let voiceConfig: {
-    provider: '11labs' | 'vapi';
+    provider: 'playht' | 'vapi';
     voiceId: string;
     stability?: number;
     similarityBoost?: number;
   };
   
   if (session.clonedVoiceId) {
-    // Try to use the cloned ElevenLabs voice
+    // Try to use the cloned PlayHT voice
     voiceConfig = {
-      provider: '11labs',
-      voiceId: session.clonedVoiceId,
-      stability: 0.95,
-      similarityBoost: 0.75
+      provider: 'playht',
+      voiceId: session.clonedVoiceId
     };
-    console.log('🎭 Attempting to use cloned ElevenLabs voice:', session.clonedVoiceId);
+    console.log('🎭 Attempting to use cloned PlayHT voice:', session.clonedVoiceId);
   } else {
     // Fallback to default Vapi voice
     voiceConfig = {
@@ -103,9 +101,9 @@ export async function createFutureSelfAssistant(session: UserSession): Promise<s
       const errorText = await response.text();
       console.error('❌ Vapi API error:', response.status, errorText);
       
-      // If ElevenLabs voice fails, try with default Vapi voice
-      if (session.clonedVoiceId && errorText.includes('11labs Voice')) {
-        console.log('🔄 ElevenLabs voice failed, retrying with default Vapi voice...');
+      // If PlayHT voice fails, try with default Vapi voice
+      if (session.clonedVoiceId && errorText.includes('PlayHT Voice')) {
+        console.log('🔄 PlayHT voice failed, retrying with default Vapi voice...');
         
         const fallbackConfig = {
           ...assistantConfig,
@@ -132,7 +130,7 @@ export async function createFutureSelfAssistant(session: UserSession): Promise<s
         
         const fallbackData = await fallbackResponse.json();
         console.log('✅ Future Self assistant created with fallback voice:', fallbackData.id);
-        console.log('💡 To use cloned voice: Add ElevenLabs API key to Vapi Provider Keys section');
+        console.log('💡 To use cloned voice: Add PlayHT API key to Vapi Provider Keys section');
         return fallbackData.id;
       }
       
