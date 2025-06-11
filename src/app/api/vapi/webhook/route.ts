@@ -298,10 +298,13 @@ async function handleCallStarted(call: VapiCall) {
                 sessionManager.updateSession(sessionId, currentSession);
                 
                 console.log(`✅ Real-time voice cloning completed: ${cloneData.voice_id}`);
-                console.log('🎭 Voice clone ready! Creating Future Self assistant immediately...');
+                console.log('🎭 Voice clone ready! Creating Future Self assistant after a short delay...');
                 
-                // 🎯 NEW: Create Future Self assistant immediately when voice clone is ready
-                await triggerFutureSelfCreation(sessionId);
+                // 🎯 NEW: Add delay to allow Vapi to recognize the new PlayHT voice
+                setTimeout(async () => {
+                  console.log('⏰ Delay complete, creating Future Self assistant...');
+                  await triggerFutureSelfCreation(sessionId);
+                }, 10000); // 10 second delay
                 
                 // Clear fallback timer since voice clone succeeded
                 if (currentSession.fallbackTimer) {
