@@ -278,8 +278,12 @@ async function handleCallStarted(call: VapiCall) {
             console.log('⏰ Voice cloning communication timed out, but PlayHT may still be processing...');
           }, 900000); // 15 minute timeout
           
+          const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.VERCEL_URL 
+            ? `https://${process.env.VERCEL_URL}` 
+            : 'http://localhost:3000';
+          
           try {
-            const cloneResponse = await fetch('http://localhost:3000/api/playht/clone-voice-realtime', {
+            const cloneResponse = await fetch(`${baseUrl}/api/playht/clone-voice-realtime`, {
               method: 'POST',
               body: formData,
               signal: controller.signal,
